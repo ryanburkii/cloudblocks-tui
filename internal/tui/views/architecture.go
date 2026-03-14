@@ -11,6 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"cloudblocks-tui/internal/aws/resources"
+	"cloudblocks-tui/internal/catalog"
 	"cloudblocks-tui/internal/graph"
 	"cloudblocks-tui/internal/tui/tuicore"
 )
@@ -238,7 +240,74 @@ func (m ArchModel) handleRenameKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) {
 	}
 }
 
-func (m ArchModel) handleSmartPlacementKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) { return m, nil }
+func (m ArchModel) handleSmartPlacementKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) {
+	km := tuicore.DefaultKeyMap()
+	def := catalog.ByTFType(m.pendingNode.Type)
+
+	switch {
+	case key.Matches(msg, km.Up):
+		if m.smartPlacementIdx > 0 {
+			m.smartPlacementIdx--
+		}
+		displayName := m.pendingNode.Type
+		if def != nil {
+			displayName = def.DisplayName
+		}
+		prompt := m.buildSmartPlacementPrompt(displayName)
+		return m, func() tea.Msg { return tuicore.StatusMsg{Text: prompt} }
+
+	case key.Matches(msg, km.Down):
+		if m.smartPlacementIdx < len(m.smartPlacementOptions)-1 {
+			m.smartPlacementIdx++
+		}
+		displayName := m.pendingNode.Type
+		if def != nil {
+			displayName = def.DisplayName
+		}
+		prompt := m.buildSmartPlacementPrompt(displayName)
+		return m, func() tea.Msg { return tuicore.StatusMsg{Text: prompt} }
+
+	case key.Matches(msg, km.Enter):
+		chosen := m.smartPlacementOptions[m.smartPlacementIdx]
+		return m.confirmSmartPlacement(chosen, def)
+
+	case key.Matches(msg, km.Escape):
+		return m.confirmSmartPlacement("none", def)
+	}
+	return m, nil
+}
+
+// confirmSmartPlacement finalises placement of pendingNode.
+// chosenParentID is either a node ID or "none".
+func (m ArchModel) confirmSmartPlacement(chosenParentID string, def *resources.ResourceDef) (ArchModel, tea.Cmd) {
+	n := m.pendingNode
+	m.pendingNode = nil
+	m.smartPlacementMode = false
+	m.smartPlacementOptions = nil
+	m.smartPlacementIdx = 0
+
+	if chosenParentID != "none" {
+		parent, ok := m.arch.Nodes[chosenParentID]
+		if ok {
+			cc := m.childCount(chosenParentID)
+			n.X = parent.X + 20*cc
+			n.Y = parent.Y + 6
+		}
+		m.arch.AddNode(n)
+		m.arch.Connect(chosenParentID, n.ID)
+	} else {
+		idx := len(m.arch.Nodes)
+		n.X, n.Y = StaggerPosition(idx)
+		m.arch.AddNode(n)
+	}
+
+	m.selectedID = n.ID
+	m.scrollToSelected()
+
+	// Emit MoveNodeMsg to signal dirty to app.go
+	id, x, y := n.ID, n.X, n.Y
+	return m, func() tea.Msg { return tuicore.MoveNodeMsg{ID: id, X: x, Y: y} }
+}
 
 func (m ArchModel) handleMoveKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) {
 	km := tuicore.DefaultKeyMap()
@@ -587,7 +656,86 @@ func (m ArchModel) deleteSelected() (ArchModel, tea.Cmd) {
 }
 
 func (m ArchModel) handleStartSmartPlacement(msg tuicore.StartSmartPlacementMsg) (ArchModel, tea.Cmd) {
-	return m, nil
+	m.pendingNode = msg.Node
+
+	def := catalog.ByTFType(msg.Node.Type)
+	if def == nil || def.ParentRefAttr == "" {
+		// No parent needed — place directly
+		return m.confirmSmartPlacement("none", def)
+	}
+
+	compatible := m.compatibleParents(def.ParentRefAttr)
+	if len(compatible) == 0 {
+		// No compatible parents exist — place directly
+		return m.confirmSmartPlacement("none", def)
+	}
+
+	// Build options list: compatible IDs + "none" sentinel
+	m.smartPlacementOptions = append(append([]string{}, compatible...), "none")
+	m.smartPlacementIdx = 0
+	m.smartPlacementMode = true
+	m.connectMode = false
+	m.portMode = false
+	m.moveMode = false
+
+	displayName := msg.Node.Type
+	if def != nil {
+		displayName = def.DisplayName
+	}
+	prompt := m.buildSmartPlacementPrompt(displayName)
+	return m, func() tea.Msg { return tuicore.StatusMsg{Text: prompt} }
+}
+
+// parentTFType maps ParentRefAttr values to the TFType of the compatible parent.
+var parentTFType = map[string]string{
+	"vpc_id":    "aws_vpc",
+	"subnet_id": "aws_subnet",
+}
+
+// compatibleParents returns node IDs of nodes whose TFType matches the
+// expected parent for the given ParentRefAttr.
+func (m ArchModel) compatibleParents(parentRefAttr string) []string {
+	wantType, ok := parentTFType[parentRefAttr]
+	if !ok {
+		return nil
+	}
+	var result []string
+	for _, id := range m.arch.NodeOrder {
+		if n, ok := m.arch.Nodes[id]; ok && n.Type == wantType {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+// childCount returns how many nodes have an edge from parentID.
+func (m ArchModel) childCount(parentID string) int {
+	count := 0
+	for _, e := range m.arch.Edges {
+		if e.From == parentID {
+			count++
+		}
+	}
+	return count
+}
+
+// buildSmartPlacementPrompt builds the status bar text for smart placement.
+func (m ArchModel) buildSmartPlacementPrompt(displayName string) string {
+	parts := []string{"Connect " + displayName + " to:"}
+	for i, id := range m.smartPlacementOptions {
+		label := "[none]"
+		if id != "none" {
+			if n, ok := m.arch.Nodes[id]; ok {
+				label = n.Name
+			}
+		}
+		if i == m.smartPlacementIdx {
+			label = ">" + label + "<"
+		}
+		parts = append(parts, label)
+	}
+	parts = append(parts, "(↑↓ select, Enter confirm)")
+	return strings.Join(parts, "  ")
 }
 
 // makeGrid creates a width×height cell grid filled with spaces.
