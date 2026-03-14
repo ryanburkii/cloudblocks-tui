@@ -157,7 +157,7 @@ func (m ArchModel) Update(msg tea.Msg) (ArchModel, tea.Cmd) {
 
 		case key.Matches(msg, km.Edit):
 			if m.selectedNode() != nil {
-				return m, m.emitSelect()
+				return m, m.emitSelectFocus()
 			}
 		}
 	}
@@ -208,6 +208,16 @@ func (m ArchModel) emitSelect() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg { return tuicore.SelectNodeMsg{NodeID: n.ID} }
+}
+
+// emitSelectFocus is like emitSelect but sets FocusProps: true, used by the
+// E key so that the root model shifts focus to the Properties panel.
+func (m ArchModel) emitSelectFocus() tea.Cmd {
+	n := m.selectedNode()
+	if n == nil {
+		return nil
+	}
+	return func() tea.Msg { return tuicore.SelectNodeMsg{NodeID: n.ID, FocusProps: true} }
 }
 
 // buildFlatList returns all nodes in DFS order starting from roots.

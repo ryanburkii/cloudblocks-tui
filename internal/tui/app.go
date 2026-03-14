@@ -265,6 +265,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if n, ok := m.arch.Nodes[msg.NodeID]; ok {
 			def := catalog.ByTFType(n.Type)
 			m.propsV = m.propsV.SetNode(n, def)
+			// E key in Architecture panel sets FocusProps: true; shift focus
+			// to Properties panel as required by the spec.
+			if msg.FocusProps {
+				m.focused = PanelProperties
+			}
 		}
 
 	case ConnectNodesMsg:
@@ -365,10 +370,17 @@ func (m Model) View() string {
 	if m.deployActive {
 		rightBottom = m.deployV.View()
 	}
-	rightPanel := propsStyle.Width(propsW).Render(
-		titleStyle.Render("PROPERTIES") + "\n" + m.propsV.View() +
-			"\n" + titleStyle.Render("ACTIONS") + "\n" + rightBottom,
-	)
+	var rightContent string
+	if m.deployActive {
+		// During deploy the Actions sub-panel is replaced by the deploy output
+		// panel; deployV.View() already renders its own "DEPLOY OUTPUT" header.
+		rightContent = titleStyle.Render("PROPERTIES") + "\n" + m.propsV.View() +
+			"\n" + rightBottom
+	} else {
+		rightContent = titleStyle.Render("PROPERTIES") + "\n" + m.propsV.View() +
+			"\n" + titleStyle.Render("ACTIONS") + "\n" + rightBottom
+	}
+	rightPanel := propsStyle.Width(propsW).Render(rightContent)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, catalogPanel, archPanel, rightPanel)
 

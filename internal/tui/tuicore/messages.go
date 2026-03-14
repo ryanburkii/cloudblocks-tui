@@ -7,7 +7,12 @@ import "cloudblocks-tui/internal/aws/resources"
 type AddNodeMsg struct{ Def *resources.ResourceDef }
 
 // SelectNodeMsg is emitted by ArchModel when the user moves the cursor.
-type SelectNodeMsg struct{ NodeID string }
+// FocusProps is true when emitted by the E key — the spec requires focus to
+// shift to the Properties panel in that case.
+type SelectNodeMsg struct {
+	NodeID     string
+	FocusProps bool
+}
 
 // ConnectNodesMsg is emitted by ArchModel when connect mode completes.
 type ConnectNodesMsg struct{ From, To string }
