@@ -33,7 +33,7 @@ func (a *Architecture) AddNode(n *Node) {
 func (a *Architecture) RemoveNode(id string) {
 	delete(a.Nodes, id)
 	// Remove from NodeOrder.
-	filtered := a.NodeOrder[:0]
+	filtered := a.NodeOrder[:0:0]
 	for _, oid := range a.NodeOrder {
 		if oid != id {
 			filtered = append(filtered, oid)
@@ -41,7 +41,7 @@ func (a *Architecture) RemoveNode(id string) {
 	}
 	a.NodeOrder = filtered
 	// Remove edges referencing this node.
-	edges := a.Edges[:0]
+	edges := a.Edges[:0:0]
 	for _, e := range a.Edges {
 		if e.From != id && e.To != id {
 			edges = append(edges, e)

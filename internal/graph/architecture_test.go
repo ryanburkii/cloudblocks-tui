@@ -64,3 +64,42 @@ func TestRoots(t *testing.T) {
 		t.Errorf("expected [vpc-1], got %v", roots)
 	}
 }
+
+func TestAddNode_Duplicate(t *testing.T) {
+	arch := graph.New()
+	n := &graph.Node{ID: "vpc-1", Type: "aws_vpc", Name: "my-vpc", Properties: map[string]interface{}{}}
+	arch.AddNode(n)
+	arch.AddNode(n) // second add must be a no-op
+	if len(arch.Nodes) != 1 {
+		t.Errorf("expected 1 node, got %d", len(arch.Nodes))
+	}
+	if len(arch.NodeOrder) != 1 {
+		t.Errorf("expected NodeOrder len 1, got %d", len(arch.NodeOrder))
+	}
+}
+
+func TestConnect_Duplicate(t *testing.T) {
+	arch := graph.New()
+	arch.AddNode(&graph.Node{ID: "vpc-1", Type: "aws_vpc", Name: "v", Properties: map[string]interface{}{}})
+	arch.AddNode(&graph.Node{ID: "sub-1", Type: "aws_subnet", Name: "s", Properties: map[string]interface{}{}})
+	arch.Connect("vpc-1", "sub-1")
+	arch.Connect("vpc-1", "sub-1") // second connect must be a no-op
+	if len(arch.Edges) != 1 {
+		t.Errorf("expected 1 edge after duplicate connect, got %d", len(arch.Edges))
+	}
+}
+
+func TestRemoveNode_NodeOrder(t *testing.T) {
+	arch := graph.New()
+	arch.AddNode(&graph.Node{ID: "vpc-1", Type: "aws_vpc", Name: "v", Properties: map[string]interface{}{}})
+	arch.AddNode(&graph.Node{ID: "sub-1", Type: "aws_subnet", Name: "s", Properties: map[string]interface{}{}})
+	arch.RemoveNode("vpc-1")
+	for _, id := range arch.NodeOrder {
+		if id == "vpc-1" {
+			t.Error("NodeOrder should not contain vpc-1 after removal")
+		}
+	}
+	if len(arch.NodeOrder) != 1 || arch.NodeOrder[0] != "sub-1" {
+		t.Errorf("expected NodeOrder=[sub-1], got %v", arch.NodeOrder)
+	}
+}
