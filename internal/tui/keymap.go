@@ -1,42 +1,13 @@
 // internal/tui/keymap.go
 package tui
 
-import "github.com/charmbracelet/bubbles/key"
+import "cloudblocks-tui/internal/tui/tuicore"
 
-// KeyMap holds all key bindings for the application.
-type KeyMap struct {
-	Up      key.Binding
-	Down    key.Binding
-	Tab     key.Binding
-	Enter   key.Binding
-	Escape  key.Binding
-	Add     key.Binding
-	Connect key.Binding
-	Delete  key.Binding
-	Rename  key.Binding
-	Edit    key.Binding
-	Save    key.Binding
-	Export  key.Binding
-	Deploy  key.Binding
-	Quit    key.Binding
-}
+// Re-export KeyMap and DefaultKeyMap from tuicore.
+// Using a type alias ensures tui.KeyMap and tuicore.KeyMap are the same type.
+type KeyMap = tuicore.KeyMap
 
 // DefaultKeyMap returns the default key bindings.
 func DefaultKeyMap() KeyMap {
-	return KeyMap{
-		Up:      key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-		Down:    key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-		Tab:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next panel")),
-		Enter:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
-		Escape:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-		Add:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add")),
-		Connect: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "connect")),
-		Delete:  key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
-		Rename:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rename")),
-		Edit:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit props")),
-		Save:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "save")),
-		Export:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "export TF")),
-		Deploy:  key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "deploy")),
-		Quit:    key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-	}
+	return tuicore.DefaultKeyMap()
 }
