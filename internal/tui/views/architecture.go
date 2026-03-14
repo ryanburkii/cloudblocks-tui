@@ -3,248 +3,281 @@ package views
 
 import (
 	"strings"
+	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"cloudblocks-tui/internal/graph"
-	"cloudblocks-tui/internal/renderer"
 	"cloudblocks-tui/internal/tui/tuicore"
 )
 
-// ArchModel is the center-panel sub-model for the architecture diagram.
-type ArchModel struct {
-	arch        *graph.Architecture
-	flatList    []*graph.Node // DFS-ordered node list for cursor navigation
-	cursor      int
-	connectMode bool
-	connectFrom string // node ID of the connect source
-	renameMode  bool
-	renameInput textinput.Model
-	width       int
-	height      int
+const (
+	blockW  = 16
+	blockH  = 4
+	canvasW = 200
+	canvasH = 60
+)
+
+// canvasCell is one terminal cell in the canvas grid.
+type canvasCell struct {
+	ch rune
+	fg lipgloss.Color
+	bg lipgloss.Color
 }
 
+// canvas color palette
 var (
-	archSelectedStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("62")).
-				Foreground(lipgloss.Color("230"))
-	archConnectSourceStyle = lipgloss.NewStyle().
-				Background(lipgloss.Color("214")).
-				Foreground(lipgloss.Color("0"))
+	colNormalBorder = lipgloss.Color("#30363d")
+	colSelected     = lipgloss.Color("#58a6ff")
+	colMove         = lipgloss.Color("#3fb950")
+	colPortTarget   = lipgloss.Color("#f0883e")
+	colNormalBg     = lipgloss.Color("#161b22")
+	colMoveBg       = lipgloss.Color("#1a2a1a")
+	colDimBg        = lipgloss.Color("#0d1117")
+	colDimFg        = lipgloss.Color("#21262d")
+	colType         = lipgloss.Color("#f0883e")
+	colName         = lipgloss.Color("#e6edf3")
+	colConnActive   = lipgloss.Color("#58a6ff")
+	colConnDim      = lipgloss.Color("#30363d")
+	colConnLink     = lipgloss.Color("#3fb950")
 )
+
+// ArchModel is the architecture panel sub-model.
+type ArchModel struct {
+	arch      *graph.Architecture
+	width     int
+	height    int
+	viewportX int
+	viewportY int
+	selectedID string
+
+	moveMode              bool
+	moveOriginX, moveOriginY int
+
+	connectMode     bool
+	portMode        bool
+	connectSourceID string
+	portTargetID    string
+
+	smartPlacementMode    bool
+	smartPlacementOptions []string // compatible node IDs + "none" sentinel at end
+	smartPlacementIdx     int
+	pendingNode           *graph.Node
+
+	renameMode  bool
+	renameInput textinput.Model
+}
 
 // NewArch creates a new ArchModel backed by arch.
 func NewArch(arch *graph.Architecture) ArchModel {
 	ti := textinput.New()
 	ti.Placeholder = "new name"
-	m := ArchModel{
-		arch:        arch,
-		renameInput: ti,
+	m := ArchModel{arch: arch, renameInput: ti}
+	if len(arch.NodeOrder) > 0 {
+		m.selectedID = arch.NodeOrder[0]
+		m.scrollToSelected()
 	}
-	m.flatList = buildFlatList(arch)
 	return m
 }
 
-// Refresh updates the model after the architecture has changed externally.
+// Refresh updates the model after the architecture changed externally.
 func (m ArchModel) Refresh(arch *graph.Architecture) ArchModel {
 	m.arch = arch
-	m.flatList = buildFlatList(arch)
-	if m.cursor >= len(m.flatList) && len(m.flatList) > 0 {
-		m.cursor = len(m.flatList) - 1
+	if m.selectedID != "" {
+		if _, ok := arch.Nodes[m.selectedID]; !ok {
+			m.selectedID = ""
+		}
 	}
+	if m.selectedID == "" && len(arch.NodeOrder) > 0 {
+		m.selectedID = arch.NodeOrder[0]
+	}
+	m.scrollToSelected()
 	return m
 }
 
-// InConnectMode reports whether the model is in connect mode.
-func (m ArchModel) InConnectMode() bool { return m.connectMode }
-
+// SetSize stores panel dimensions and re-scrolls to selected block.
 func (m ArchModel) SetSize(w, h int) ArchModel {
 	m.width = w
 	m.height = h
+	m.scrollToSelected()
 	return m
 }
 
-func (m ArchModel) Update(msg tea.Msg) (ArchModel, tea.Cmd) {
-	km := tuicore.DefaultKeyMap()
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		// Rename mode: capture text input.
-		if m.renameMode {
-			switch msg.String() {
-			case "enter":
-				newName := strings.TrimSpace(m.renameInput.Value())
-				if newName == "" {
-					newName = m.selectedNode().Name
-				}
-				m.renameMode = false
-				nodeID := m.selectedNode().ID
-				return m, func() tea.Msg {
-					return tuicore.RenameNodeMsg{NodeID: nodeID, Name: newName}
-				}
-			case "esc":
-				m.renameMode = false
-				return m, nil
-			default:
-				var cmd tea.Cmd
-				m.renameInput, cmd = m.renameInput.Update(msg)
-				return m, cmd
-			}
-		}
+// Width returns the panel width (used by app.go for deploy panel sizing).
+func (m ArchModel) Width() int { return m.width }
 
-		switch {
-		case key.Matches(msg, km.Up):
-			if m.cursor > 0 {
-				m.cursor--
-			}
-			return m, m.emitSelect()
+// InConnectMode reports whether manual connect mode is active.
+func (m ArchModel) InConnectMode() bool { return m.connectMode }
 
-		case key.Matches(msg, km.Down):
-			if m.cursor < len(m.flatList)-1 {
-				m.cursor++
-			}
-			return m, m.emitSelect()
+// InLinkMode reports whether link mode is active.
+func (m ArchModel) InLinkMode() bool { return m.portMode }
 
-		case key.Matches(msg, km.Connect):
-			if !m.connectMode && m.selectedNode() != nil {
-				m.connectMode = true
-				m.connectFrom = m.selectedNode().ID
-			}
-			return m, func() tea.Msg {
-				return tuicore.StatusMsg{Text: "Select target to connect (Esc to cancel)"}
-			}
+// InSmartPlacementMode reports whether smart placement prompt is active.
+func (m ArchModel) InSmartPlacementMode() bool { return m.smartPlacementMode }
 
-		case key.Matches(msg, km.Enter):
-			if m.connectMode && m.selectedNode() != nil {
-				target := m.selectedNode().ID
-				if target == m.connectFrom {
-					// Spec: self-loop rejected, connect mode stays active
-					return m, func() tea.Msg {
-						return tuicore.StatusMsg{Text: "Cannot connect a resource to itself"}
-					}
-				}
-				from := m.connectFrom
-				m.connectMode = false
-				m.connectFrom = ""
-				return m, func() tea.Msg {
-					return tuicore.ConnectNodesMsg{From: from, To: target}
-				}
-			}
-
-		case key.Matches(msg, km.Escape):
-			if m.connectMode {
-				m.connectMode = false
-				m.connectFrom = ""
-			}
-			return m, nil
-
-		case key.Matches(msg, km.Delete):
-			if m.selectedNode() != nil && !m.connectMode {
-				nodeID := m.selectedNode().ID
-				return m, func() tea.Msg {
-					return tuicore.DeleteNodeMsg{NodeID: nodeID}
-				}
-			}
-
-		case key.Matches(msg, km.Rename):
-			if m.selectedNode() != nil && !m.connectMode {
-				m.renameMode = true
-				m.renameInput.SetValue(m.selectedNode().Name)
-				m.renameInput.Focus()
-			}
-
-		case key.Matches(msg, km.Edit):
-			if m.selectedNode() != nil {
-				return m, m.emitSelectFocus()
-			}
-		}
-	}
-	return m, nil
+// StaggerPosition computes the default canvas (X, Y) for new node index n (0-based).
+// n = len(arch.Nodes) before the new node is added.
+func StaggerPosition(n int) (int, int) {
+	col := n / 9
+	row := n % 9
+	return 2 + col*20, 2 + row*6
 }
 
-func (m ArchModel) View() string {
-	if m.renameMode && m.selectedNode() != nil {
-		return "Rename: " + m.renameInput.View()
+// scrollToSelected adjusts viewportX/Y so the selected block is visible.
+func (m *ArchModel) scrollToSelected() {
+	if m.selectedID == "" || m.width == 0 || m.height == 0 {
+		return
+	}
+	n, ok := m.arch.Nodes[m.selectedID]
+	if !ok {
+		return
+	}
+	// Check safe zone
+	if n.X >= m.viewportX+4 && n.X+blockW <= m.viewportX+m.width-4 &&
+		n.Y >= m.viewportY+4 && n.Y+blockH <= m.viewportY+m.height-4 {
+		return
+	}
+	// Center on block's center point
+	vx := n.X + 8 - m.width/2
+	vy := n.Y + 2 - m.height/2
+	maxVX := canvasW - m.width
+	maxVY := canvasH - m.height
+	if maxVX < 0 {
+		maxVX = 0
+	}
+	if maxVY < 0 {
+		maxVY = 0
+	}
+	m.viewportX = clampInt(vx, 0, maxVX)
+	m.viewportY = clampInt(vy, 0, maxVY)
+}
+
+// clampInt clamps v to [lo, hi].
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// truncatePad truncates s to at most n runes, padding with spaces to exactly n.
+func truncatePad(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) > n {
+		runes = runes[:n]
+	}
+	for len(runes) < n {
+		runes = append(runes, ' ')
+	}
+	return string(runes)
+}
+
+// runeLen returns the number of runes in s.
+func runeLen(s string) int {
+	return utf8.RuneCountInString(s)
+}
+
+// Update processes input events.
+func (m ArchModel) Update(msg tea.Msg) (ArchModel, tea.Cmd) {
+	// TODO(Task 3): uncomment when StartSmartPlacementMsg is added to tuicore
+	// if spm, ok := msg.(tuicore.StartSmartPlacementMsg); ok {
+	// 	return m.handleStartSmartPlacement(spm)
+	// }
+
+	keyMsg, isKey := msg.(tea.KeyMsg)
+	if !isKey {
+		return m, nil
 	}
 
-	tree := renderer.Render(m.arch)
-	if tree == "" {
+	if m.renameMode {
+		return m.handleRenameKey(keyMsg)
+	}
+	if m.smartPlacementMode {
+		return m.handleSmartPlacementKey(keyMsg)
+	}
+	if m.moveMode {
+		return m.handleMoveKey(keyMsg)
+	}
+	if m.portMode {
+		return m.handleLinkKey(keyMsg)
+	}
+	if m.connectMode {
+		return m.handleConnectKey(keyMsg)
+	}
+	return m.handleNormalKey(keyMsg)
+}
+
+// placeholder stubs — filled in by later tasks
+func (m ArchModel) handleRenameKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		newName := strings.TrimSpace(m.renameInput.Value())
+		if newName == "" {
+			if n, ok := m.arch.Nodes[m.selectedID]; ok {
+				newName = n.Name
+			}
+		}
+		m.renameMode = false
+		nodeID := m.selectedID
+		return m, func() tea.Msg {
+			return tuicore.RenameNodeMsg{NodeID: nodeID, Name: newName}
+		}
+	case "esc":
+		m.renameMode = false
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.renameInput, cmd = m.renameInput.Update(msg)
+		return m, cmd
+	}
+}
+
+func (m ArchModel) handleSmartPlacementKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)  { return m, nil }
+func (m ArchModel) handleMoveKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)             { return m, nil }
+func (m ArchModel) handleLinkKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)             { return m, nil }
+func (m ArchModel) handleConnectKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)          { return m, nil }
+func (m ArchModel) handleNormalKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)           { return m, nil }
+
+// TODO(Task 3): uncomment when StartSmartPlacementMsg is added to tuicore
+// func (m ArchModel) handleStartSmartPlacement(msg tuicore.StartSmartPlacementMsg) (ArchModel, tea.Cmd) {
+// 	return m, nil
+// }
+
+// View renders the architecture panel.
+func (m ArchModel) View() string {
+	if m.renameMode {
+		if n, ok := m.arch.Nodes[m.selectedID]; ok {
+			return "Rename " + n.Name + ": " + m.renameInput.View()
+		}
+	}
+	if len(m.arch.Nodes) == 0 {
 		return mutedStyle.Render("(empty — press A in Catalog to add resources)")
 	}
-
-	// Highlight the selected node line.
-	lines := strings.Split(tree, "\n")
-	var sb strings.Builder
-	for i, line := range lines {
-		// Match selected node by looking for "(nodeID)" in the line.
-		if m.selectedNode() != nil && strings.Contains(line, "("+m.selectedNode().ID+")") {
-			if m.connectMode && m.selectedNode().ID == m.connectFrom {
-				sb.WriteString(archConnectSourceStyle.Render(line))
-			} else {
-				sb.WriteString(archSelectedStyle.Render(line))
-			}
-		} else {
-			sb.WriteString(line)
-		}
-		if i < len(lines)-1 {
-			sb.WriteString("\n")
-		}
-	}
-	return sb.String()
+	return mutedStyle.Render("(canvas — coming in next task)")
 }
 
-func (m ArchModel) selectedNode() *graph.Node {
-	if len(m.flatList) == 0 || m.cursor < 0 || m.cursor >= len(m.flatList) {
-		return nil
-	}
-	return m.flatList[m.cursor]
-}
-
+// emitSelect emits SelectNodeMsg for the currently selected node.
 func (m ArchModel) emitSelect() tea.Cmd {
-	n := m.selectedNode()
-	if n == nil {
+	if m.selectedID == "" {
 		return nil
 	}
-	return func() tea.Msg { return tuicore.SelectNodeMsg{NodeID: n.ID} }
+	id := m.selectedID
+	return func() tea.Msg { return tuicore.SelectNodeMsg{NodeID: id} }
 }
 
-// emitSelectFocus is like emitSelect but sets FocusProps: true, used by the
-// E key so that the root model shifts focus to the Properties panel.
-func (m ArchModel) emitSelectFocus() tea.Cmd {
-	n := m.selectedNode()
-	if n == nil {
-		return nil
+// emitSelectFocus is like emitSelect but sets FocusProps: true (E key).
+func (m ArchModel) emitSelectFocus() (ArchModel, tea.Cmd) {
+	if m.selectedID == "" {
+		return m, nil
 	}
-	return func() tea.Msg { return tuicore.SelectNodeMsg{NodeID: n.ID, FocusProps: true} }
+	id := m.selectedID
+	return m, func() tea.Msg { return tuicore.SelectNodeMsg{NodeID: id, FocusProps: true} }
 }
 
-// buildFlatList returns all nodes in DFS order starting from roots.
-func buildFlatList(arch *graph.Architecture) []*graph.Node {
-	var result []*graph.Node
-	visited := make(map[string]bool)
-	var dfs func(n *graph.Node)
-	dfs = func(n *graph.Node) {
-		if visited[n.ID] {
-			return
-		}
-		visited[n.ID] = true
-		result = append(result, n)
-		for _, child := range arch.Children(n.ID) {
-			dfs(child)
-		}
-	}
-	for _, root := range arch.Roots() {
-		dfs(root)
-	}
-	// Also include any nodes not reachable via edges (isolated nodes).
-	for _, id := range arch.NodeOrder {
-		if !visited[id] {
-			if n, ok := arch.Nodes[id]; ok {
-				result = append(result, n)
-			}
-		}
-	}
-	return result
-}
+// Ensure unused import is referenced (will be used in Task 5).
+var _ = runeLen
