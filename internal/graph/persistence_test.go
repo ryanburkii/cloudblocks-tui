@@ -43,3 +43,27 @@ func TestLoad_FileNotFound(t *testing.T) {
 		t.Error("expected error for missing file")
 	}
 }
+
+func TestNodeXY_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "arch.json")
+
+	arch := graph.New()
+	arch.AddNode(&graph.Node{
+		ID: "vpc-1", Type: "aws_vpc", Name: "v",
+		Properties: map[string]interface{}{},
+		X: 42, Y: 18,
+	})
+
+	if err := arch.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	arch2 := graph.New()
+	if err := arch2.Load(path); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	n := arch2.Nodes["vpc-1"]
+	if n.X != 42 || n.Y != 18 {
+		t.Errorf("expected X=42 Y=18, got X=%d Y=%d", n.X, n.Y)
+	}
+}
