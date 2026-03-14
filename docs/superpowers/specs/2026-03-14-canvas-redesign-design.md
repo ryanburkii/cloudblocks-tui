@@ -16,7 +16,7 @@ Replace the current ASCII tree view in the Architecture panel with a free-form b
 1. Replace ASCII tree with a scrollable 2D canvas of resource blocks
 2. Each block displays resource type and name; selected block is highlighted
 3. Blocks are movable on the canvas via move mode (`M`)
-4. Three connection modes: smart placement (auto), port mode (`P`), manual connect (`C`)
+4. Three connection modes: smart placement (auto), link mode (`L`), manual connect (`C`)
 5. Connections render as orthogonal (90°) lines with arrowheads
 6. Save/load preserves block positions
 
@@ -89,8 +89,9 @@ type ArchModel struct {
 | `internal/graph` | `architecture_test.go` | Add test: X/Y round-trips through `Save`/`Load` correctly |
 | `internal/renderer` | `ascii.go` | **Deleted** |
 | `internal/renderer` | `ascii_test.go` | **Deleted** |
-| `internal/tui/tuicore` | `messages.go` | Add `MoveNodeMsg{ID string, X, Y int}`. Note: `ConnectNodesMsg`, `RenameNodeMsg`, `DeleteNodeMsg` already exist in this file — no changes needed for those. |
-| `internal/tui` | `app.go` | Handle `MoveNodeMsg`; call `archV.SetSize` on `WindowSizeMsg` |
+| `internal/tui/tuicore` | `messages.go` | Add `MoveNodeMsg{ID string, X, Y int}` and `StartSmartPlacementMsg{Node *graph.Node}`. Existing `ConnectNodesMsg`, `RenameNodeMsg`, `DeleteNodeMsg` unchanged. |
+| `internal/tui` | `messages.go` | Add type aliases for `MoveNodeMsg` and `StartSmartPlacementMsg` (following the existing alias pattern for all other message types). |
+| `internal/tui` | `app.go` | Handle `MoveNodeMsg` (set dirty); handle `AddNodeMsg`: if resource has non-empty `ParentRefAttr`, allocate node but emit `StartSmartPlacementMsg` to `ArchModel` instead of calling `arch.AddNode`. If `ParentRefAttr` empty, existing flow unchanged. Call `archV.SetSize` on `WindowSizeMsg`. |
 | `internal/tui/views` | `architecture.go` | Full rewrite of render + input handling |
 
 `internal/tui/layout.go` is unchanged — panel size calculations are already there and `app.go` derives the architecture panel dimensions from them before calling `SetSize`.
@@ -191,7 +192,7 @@ This centers the viewport on the block's center point `(node.X+8, node.Y+2)`. In
 |---|---|
 | `↑` `↓` `←` `→` | Cycle to nearest block in that direction (see algorithm below) |
 | `M` | Enter move mode |
-| `P` | Enter port mode |
+| `L` | Enter port mode (link) |
 | `C` | Enter connect mode |
 | `D` | Delete selected block + all its edges |
 | `R` | Enter rename mode (textinput in status bar, pre-filled with current name) |
@@ -217,8 +218,8 @@ This centers the viewport on the block's center point `(node.X+8, node.Y+2)`. In
 
 ### Port mode (drag-to-connect)
 
-1. Press `P` → `portMode = true`, `connectSourceID = selectedID`, `portTargetID = ""`; source block turns green + `⇥`
-2. Status bar: `"Port mode — navigate to target, Enter to connect, Esc to cancel"`
+1. Press `L` → `portMode = true`, `connectSourceID = selectedID`, `portTargetID = ""`; source block turns green + `⇥`
+2. Status bar: `"Link mode — navigate to target, Enter to connect, Esc to cancel"`
 3. Arrow keys cycle `portTargetID` using the adjacent block algorithm. Initial pivot (when `portTargetID == ""`) is `connectSourceID`. Once `portTargetID` is set, pivot is `portTargetID`. The source block (`connectSourceID`) is excluded from candidates at all times. Hovered target highlights orange.
 4. `Enter` (with `portTargetID != ""`) → emit `ConnectNodesMsg{From: connectSourceID, To: portTargetID}`; `portMode = false`; `selectedID = portTargetID`
 5. `Enter` (with `portTargetID == ""`) → no-op
@@ -256,20 +257,21 @@ Resources with empty `ParentRefAttr` (VPC, IGW, S3, DynamoDB, ALB) skip smart pl
 
 **Flow:**
 
-1. Create `pendingNode` with a generated ID and default properties. Do NOT call `arch.AddNode` yet — the node is held in `ArchModel.pendingNode` only.
-2. Look up compatible parent nodes from the current architecture (based on table above). If none exist, skip prompt — jump to step 8 with `[none]` behaviour.
-3. Focus shifts to the canvas. All blocks and connections dim (muted style). Compatible parent nodes remain full brightness. Set `smartPlacementMode = true`, `smartPlacementOptions = [compatibleIDs..., "none"]`, `smartPlacementIdx = 0`.
-4. Status bar: `"Connect <DisplayName> to: <name1>  <name2>  [none]  (↑↓ select, Enter confirm)"`
-5. `↑`/`↓` cycle `smartPlacementIdx`. `←`/`→` are no-ops. `Enter` confirms the highlighted option. `Esc` acts as `[none]`.
-6. **If a parent is chosen:**
+1. `CatalogModel` emits `AddNodeMsg{Def}` as usual.
+2. `app.go` receives `AddNodeMsg`. Since `Def.ParentRefAttr` is non-empty, it allocates a `*graph.Node` (generates ID, copies default props) but does NOT call `arch.AddNode`. Instead it emits `StartSmartPlacementMsg{Node: node}` which is dispatched to `ArchModel`.
+3. `ArchModel` receives `StartSmartPlacementMsg`, stores the node as `pendingNode`. Look up compatible parent nodes from the current architecture. If none exist, skip prompt — jump to step 9 with `[none]` behaviour.
+4. Focus shifts to the canvas. All blocks and connections dim (muted style). Compatible parent nodes remain full brightness. Set `smartPlacementMode = true`, `smartPlacementOptions = [compatibleIDs..., "none"]`, `smartPlacementIdx = 0`.
+5. Status bar: `"Connect <DisplayName> to: <name1>  <name2>  [none]  (↑↓ select, Enter confirm)"`
+6. `↑`/`↓` cycle `smartPlacementIdx`. `←`/`→` are no-ops. `Enter` confirms the highlighted option. `Esc` acts as `[none]`.
+7. **If a parent is chosen:**
    - Count existing children: `childCount = number of edges where edge.From == chosenParentID`
    - Place `pendingNode` at `(parentX + 20 * childCount, parentY + 6)`
    - Call `arch.AddNode(pendingNode)` then `arch.Connect(chosenParentID, pendingNode.ID)`
-7. **If `[none]`:**
+8. **If `[none]`:**
    - Stagger index = `len(arch.Nodes)` at this moment (pendingNode is not yet in arch.Nodes)
    - Compute stagger position, set `pendingNode.X, pendingNode.Y`
    - Call `arch.AddNode(pendingNode)` with no edge
-8. Set `selectedID = pendingNode.ID`; `pendingNode = nil`; `smartPlacementMode = false`; canvas un-dims; emit `AddNodeMsg` to `app.go` (so dirty flag is set).
+9. Set `selectedID = pendingNode.ID`; `pendingNode = nil`; `smartPlacementMode = false`; canvas un-dims; emit `MoveNodeMsg` with the node's final X/Y to `app.go` (so dirty flag is set via the existing MoveNodeMsg handler).
 
 ### Rename mode
 
