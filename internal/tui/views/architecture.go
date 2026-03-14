@@ -239,9 +239,144 @@ func (m ArchModel) handleRenameKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) {
 }
 
 func (m ArchModel) handleSmartPlacementKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) { return m, nil }
-func (m ArchModel) handleMoveKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)           { return m, nil }
-func (m ArchModel) handleLinkKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)           { return m, nil }
-func (m ArchModel) handleConnectKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)        { return m, nil }
+
+func (m ArchModel) handleMoveKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) {
+	km := tuicore.DefaultKeyMap()
+	n, ok := m.arch.Nodes[m.selectedID]
+	if !ok {
+		m.moveMode = false
+		return m, nil
+	}
+
+	switch {
+	case key.Matches(msg, km.Up):
+		n.Y = clampInt(n.Y-2, 0, canvasH-blockH)
+		m.scrollToSelected()
+	case key.Matches(msg, km.Down):
+		n.Y = clampInt(n.Y+2, 0, canvasH-blockH)
+		m.scrollToSelected()
+	case key.Matches(msg, km.Left):
+		n.X = clampInt(n.X-2, 0, canvasW-blockW)
+		m.scrollToSelected()
+	case key.Matches(msg, km.Right):
+		n.X = clampInt(n.X+2, 0, canvasW-blockW)
+		m.scrollToSelected()
+	case key.Matches(msg, km.Move), key.Matches(msg, km.Enter):
+		// Drop: confirm and set dirty
+		m.moveMode = false
+		id, x, y := n.ID, n.X, n.Y
+		return m, func() tea.Msg { return tuicore.MoveNodeMsg{ID: id, X: x, Y: y} }
+	case key.Matches(msg, km.Escape):
+		// Restore original position
+		n.X, n.Y = m.moveOriginX, m.moveOriginY
+		m.moveMode = false
+		id, x, y := n.ID, n.X, n.Y
+		return m, func() tea.Msg { return tuicore.MoveNodeMsg{ID: id, X: x, Y: y} }
+	}
+	return m, nil
+}
+
+func (m ArchModel) handleConnectKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) {
+	km := tuicore.DefaultKeyMap()
+
+	switch {
+	case key.Matches(msg, km.Up):
+		if id := m.adjacentBlock("up"); id != "" {
+			m.selectedID = id
+			m.scrollToSelected()
+			return m, m.emitSelect()
+		}
+	case key.Matches(msg, km.Down):
+		if id := m.adjacentBlock("down"); id != "" {
+			m.selectedID = id
+			m.scrollToSelected()
+			return m, m.emitSelect()
+		}
+	case key.Matches(msg, km.Left):
+		if id := m.adjacentBlock("left"); id != "" {
+			m.selectedID = id
+			m.scrollToSelected()
+			return m, m.emitSelect()
+		}
+	case key.Matches(msg, km.Right):
+		if id := m.adjacentBlock("right"); id != "" {
+			m.selectedID = id
+			m.scrollToSelected()
+			return m, m.emitSelect()
+		}
+	case key.Matches(msg, km.Enter):
+		if m.selectedID == m.connectSourceID {
+			return m, func() tea.Msg {
+				return tuicore.StatusMsg{Text: "Cannot connect a resource to itself"}
+			}
+		}
+		from, to := m.connectSourceID, m.selectedID
+		m.connectMode = false
+		m.connectSourceID = ""
+		return m, func() tea.Msg { return tuicore.ConnectNodesMsg{From: from, To: to} }
+	case key.Matches(msg, km.Escape):
+		m.connectMode = false
+		m.connectSourceID = ""
+	}
+	return m, nil
+}
+
+func (m ArchModel) handleLinkKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) {
+	km := tuicore.DefaultKeyMap()
+
+	// The pivot for navigation is portTargetID if set, else connectSourceID.
+	pivot := m.connectSourceID
+	if m.portTargetID != "" {
+		pivot = m.portTargetID
+	}
+
+	navigate := func(dir string) (ArchModel, tea.Cmd) {
+		// Temporarily set selectedID to pivot for adjacentBlock to work
+		oldSel := m.selectedID
+		m.selectedID = pivot
+		id := m.adjacentBlock(dir)
+		m.selectedID = oldSel
+		if id != "" && id != m.connectSourceID {
+			m.portTargetID = id
+			m.scrollToBlock(id)
+		}
+		return m, nil
+	}
+
+	switch {
+	case key.Matches(msg, km.Up):
+		return navigate("up")
+	case key.Matches(msg, km.Down):
+		return navigate("down")
+	case key.Matches(msg, km.Left):
+		return navigate("left")
+	case key.Matches(msg, km.Right):
+		return navigate("right")
+	case key.Matches(msg, km.Enter):
+		if m.portTargetID == "" {
+			return m, nil
+		}
+		from, to := m.connectSourceID, m.portTargetID
+		m.portMode = false
+		m.connectSourceID = ""
+		m.portTargetID = ""
+		m.selectedID = to
+		return m, func() tea.Msg { return tuicore.ConnectNodesMsg{From: from, To: to} }
+	case key.Matches(msg, km.Escape):
+		m.portMode = false
+		m.connectSourceID = ""
+		m.portTargetID = ""
+	}
+	return m, nil
+}
+
+// scrollToBlock scrolls the viewport to make the given node visible.
+func (m *ArchModel) scrollToBlock(id string) {
+	old := m.selectedID
+	m.selectedID = id
+	m.scrollToSelected()
+	m.selectedID = old
+}
 
 // blockCenter returns the center point of a node's block.
 func blockCenter(n *graph.Node) (float64, float64) {
