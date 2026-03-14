@@ -2,9 +2,11 @@
 package views
 
 import (
+	"math"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -236,11 +238,217 @@ func (m ArchModel) handleRenameKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) {
 	}
 }
 
-func (m ArchModel) handleSmartPlacementKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)  { return m, nil }
-func (m ArchModel) handleMoveKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)             { return m, nil }
-func (m ArchModel) handleLinkKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)             { return m, nil }
-func (m ArchModel) handleConnectKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)          { return m, nil }
-func (m ArchModel) handleNormalKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)           { return m, nil }
+func (m ArchModel) handleSmartPlacementKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) { return m, nil }
+func (m ArchModel) handleMoveKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)           { return m, nil }
+func (m ArchModel) handleLinkKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)           { return m, nil }
+func (m ArchModel) handleConnectKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)        { return m, nil }
+
+// blockCenter returns the center point of a node's block.
+func blockCenter(n *graph.Node) (float64, float64) {
+	return float64(n.X) + float64(blockW)/2, float64(n.Y) + float64(blockH)/2
+}
+
+// adjacentBlock finds the nearest block in the given direction from selectedID.
+// dir: "up", "down", "left", "right"
+// Returns "" if no block found in that direction.
+func (m ArchModel) adjacentBlock(dir string) string {
+	src, ok := m.arch.Nodes[m.selectedID]
+	if !ok {
+		return ""
+	}
+	sx, sy := blockCenter(src)
+
+	bestID := ""
+	bestDist := math.MaxFloat64
+
+	for _, id := range m.arch.NodeOrder {
+		if id == m.selectedID {
+			continue
+		}
+		n, ok := m.arch.Nodes[id]
+		if !ok {
+			continue
+		}
+		cx, cy := blockCenter(n)
+		dx := cx - sx
+		dy := cy - sy
+
+		// Check half-plane
+		inPlane := false
+		switch dir {
+		case "right":
+			inPlane = dx > 0
+		case "left":
+			inPlane = dx < 0
+		case "down":
+			inPlane = dy > 0
+		case "up":
+			inPlane = dy < 0
+		}
+		if !inPlane {
+			continue
+		}
+
+		// 45° cone filter: for horizontal dirs abs(dy)<=abs(dx), vertical abs(dx)<=abs(dy)
+		inCone := false
+		switch dir {
+		case "right", "left":
+			inCone = math.Abs(dy) <= math.Abs(dx)
+		case "up", "down":
+			inCone = math.Abs(dx) <= math.Abs(dy)
+		}
+
+		dist := math.Sqrt(dx*dx + dy*dy)
+		if inCone && dist < bestDist {
+			bestDist = dist
+			bestID = id
+		}
+	}
+
+	// If nothing in cone, widen to full half-plane
+	if bestID == "" {
+		for _, id := range m.arch.NodeOrder {
+			if id == m.selectedID {
+				continue
+			}
+			n, ok := m.arch.Nodes[id]
+			if !ok {
+				continue
+			}
+			cx, cy := blockCenter(n)
+			dx := cx - sx
+			dy := cy - sy
+			inPlane := false
+			switch dir {
+			case "right":
+				inPlane = dx > 0
+			case "left":
+				inPlane = dx < 0
+			case "down":
+				inPlane = dy > 0
+			case "up":
+				inPlane = dy < 0
+			}
+			if !inPlane {
+				continue
+			}
+			dist := math.Sqrt(dx*dx + dy*dy)
+			if dist < bestDist {
+				bestDist = dist
+				bestID = id
+			}
+		}
+	}
+	return bestID
+}
+
+func (m ArchModel) handleNormalKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) {
+	km := tuicore.DefaultKeyMap()
+
+	switch {
+	case key.Matches(msg, km.Up):
+		if id := m.adjacentBlock("up"); id != "" {
+			m.selectedID = id
+			m.scrollToSelected()
+			return m, m.emitSelect()
+		}
+	case key.Matches(msg, km.Down):
+		if id := m.adjacentBlock("down"); id != "" {
+			m.selectedID = id
+			m.scrollToSelected()
+			return m, m.emitSelect()
+		}
+	case key.Matches(msg, km.Left):
+		if id := m.adjacentBlock("left"); id != "" {
+			m.selectedID = id
+			m.scrollToSelected()
+			return m, m.emitSelect()
+		}
+	case key.Matches(msg, km.Right):
+		if id := m.adjacentBlock("right"); id != "" {
+			m.selectedID = id
+			m.scrollToSelected()
+			return m, m.emitSelect()
+		}
+	case key.Matches(msg, km.Move):
+		if m.selectedID != "" {
+			return m.enterMoveMode()
+		}
+	case key.Matches(msg, km.Link):
+		if m.selectedID != "" {
+			return m.enterLinkMode()
+		}
+	case key.Matches(msg, km.Connect):
+		if m.selectedID != "" {
+			return m.enterConnectMode()
+		}
+	case key.Matches(msg, km.Delete):
+		if m.selectedID != "" {
+			return m.deleteSelected()
+		}
+	case key.Matches(msg, km.Rename):
+		if m.selectedID != "" {
+			return m.enterRenameMode()
+		}
+	case key.Matches(msg, km.Edit):
+		if m.selectedID != "" {
+			return m.emitSelectFocus()
+		}
+	}
+	return m, nil
+}
+
+func (m ArchModel) enterMoveMode() (ArchModel, tea.Cmd) {
+	if n, ok := m.arch.Nodes[m.selectedID]; ok {
+		m.moveOriginX, m.moveOriginY = n.X, n.Y
+	}
+	m.moveMode = true
+	m.connectMode = false
+	m.portMode = false
+	m.smartPlacementMode = false
+	return m, func() tea.Msg {
+		n := m.arch.Nodes[m.selectedID]
+		return tuicore.StatusMsg{Text: "Moving " + n.Name + " — arrows to reposition, Enter/M to drop, Esc to cancel"}
+	}
+}
+
+func (m ArchModel) enterLinkMode() (ArchModel, tea.Cmd) {
+	m.portMode = true
+	m.connectMode = false
+	m.moveMode = false
+	m.smartPlacementMode = false
+	m.connectSourceID = m.selectedID
+	m.portTargetID = ""
+	return m, func() tea.Msg {
+		return tuicore.StatusMsg{Text: "Link mode — navigate to target, Enter to connect, Esc to cancel"}
+	}
+}
+
+func (m ArchModel) enterConnectMode() (ArchModel, tea.Cmd) {
+	m.connectMode = true
+	m.portMode = false
+	m.moveMode = false
+	m.smartPlacementMode = false
+	m.connectSourceID = m.selectedID
+	return m, func() tea.Msg {
+		return tuicore.StatusMsg{Text: "Select target to connect (Esc to cancel)"}
+	}
+}
+
+func (m ArchModel) enterRenameMode() (ArchModel, tea.Cmd) {
+	if n, ok := m.arch.Nodes[m.selectedID]; ok {
+		m.renameMode = true
+		m.renameInput.SetValue(n.Name)
+		m.renameInput.Focus()
+	}
+	return m, nil
+}
+
+func (m ArchModel) deleteSelected() (ArchModel, tea.Cmd) {
+	id := m.selectedID
+	m.selectedID = ""
+	return m, func() tea.Msg { return tuicore.DeleteNodeMsg{NodeID: id} }
+}
 
 func (m ArchModel) handleStartSmartPlacement(msg tuicore.StartSmartPlacementMsg) (ArchModel, tea.Cmd) {
 	return m, nil
