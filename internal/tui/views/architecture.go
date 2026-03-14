@@ -491,20 +491,32 @@ func (m ArchModel) drawEdge(grid [][]canvasCell, from, to *graph.Node, fg lipglo
 	arrow := arrowChar(dir)
 
 	switch dir {
-	case "right", "left":
-		// Horizontal-first L-shape
+	case "right":
+		// Horizontal-first L-shape, travelling rightward
 		if ey == ny {
-			// Straight horizontal
 			drawHLine(grid, ex, nx, ey, fg)
 		} else {
-			// L-shape: horizontal to nx, then vertical to ny
 			drawHLine(grid, ex, nx, ey, fg)
 			drawVLine(grid, nx, ey, ny, fg)
-			// Corner character at bend
+			// Corner: arrived from left, bending down=┐ or up=┘
 			if ny > ey {
 				setCell(grid, nx, ey, '┐', fg, "")
 			} else {
 				setCell(grid, nx, ey, '┘', fg, "")
+			}
+		}
+	case "left":
+		// Horizontal-first L-shape, travelling leftward (nx < ex)
+		if ey == ny {
+			drawHLine(grid, ex, nx, ey, fg)
+		} else {
+			drawHLine(grid, ex, nx, ey, fg)
+			drawVLine(grid, nx, ey, ny, fg)
+			// Corner: arrived from right, bending down=┌ or up=└
+			if ny > ey {
+				setCell(grid, nx, ey, '┌', fg, "")
+			} else {
+				setCell(grid, nx, ey, '└', fg, "")
 			}
 		}
 	case "bottom":
@@ -598,12 +610,29 @@ func (m ArchModel) drawEdgeDashed(grid [][]canvasCell, from, to *graph.Node, fg 
 	}
 
 	switch dir {
-	case "right", "left":
+	case "right":
 		if ey == ny {
 			drawDashedH(ex, nx, ey)
 		} else {
 			drawDashedH(ex, nx, ey)
 			drawDashedV(nx, ey, ny)
+			if ny > ey {
+				setCell(grid, nx, ey, '┐', fg, "")
+			} else {
+				setCell(grid, nx, ey, '┘', fg, "")
+			}
+		}
+	case "left":
+		if ey == ny {
+			drawDashedH(ex, nx, ey)
+		} else {
+			drawDashedH(ex, nx, ey)
+			drawDashedV(nx, ey, ny)
+			if ny > ey {
+				setCell(grid, nx, ey, '┌', fg, "")
+			} else {
+				setCell(grid, nx, ey, '└', fg, "")
+			}
 		}
 	case "bottom", "top":
 		if ex == nx {
@@ -611,6 +640,20 @@ func (m ArchModel) drawEdgeDashed(grid [][]canvasCell, from, to *graph.Node, fg 
 		} else {
 			drawDashedV(ex, ey, ny)
 			drawDashedH(ex, nx, ny)
+			// Corner at (ex, ny): same logic as drawEdge bottom/top
+			if dir == "bottom" {
+				if nx > ex {
+					setCell(grid, ex, ny, '┌', fg, "")
+				} else {
+					setCell(grid, ex, ny, '┐', fg, "")
+				}
+			} else {
+				if nx > ex {
+					setCell(grid, ex, ny, '└', fg, "")
+				} else {
+					setCell(grid, ex, ny, '┘', fg, "")
+				}
+			}
 		}
 	}
 }
