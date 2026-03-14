@@ -384,6 +384,237 @@ func (m ArchModel) drawBlock(grid [][]canvasCell, n *graph.Node) {
 	}
 }
 
+// exitDir returns which side the connection exits from, based on relative position of to vs from.
+// Returns "right", "bottom", "left", or "top".
+func exitDir(from, to *graph.Node) string {
+	// to is to the left of from
+	if to.X+blockW <= from.X {
+		return "left"
+	}
+	// to is above from
+	if to.Y+blockH <= from.Y {
+		return "top"
+	}
+	// to is directly below (center X close)
+	if to.Y >= from.Y+blockH && abs(to.X+8-(from.X+8)) < blockW {
+		return "bottom"
+	}
+	return "right"
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// exitPoint returns the canvas coordinates of the connection exit point.
+func exitPoint(n *graph.Node, dir string) (int, int) {
+	switch dir {
+	case "right":
+		return n.X + blockW, n.Y + 2
+	case "bottom":
+		return n.X + 8, n.Y + blockH
+	case "left":
+		return n.X, n.Y + 2
+	case "top":
+		return n.X + 8, n.Y
+	}
+	return n.X + blockW, n.Y + 2
+}
+
+// entryPoint returns the canvas coordinates of the connection entry point.
+func entryPoint(n *graph.Node, dir string) (int, int) {
+	switch dir {
+	case "right":
+		return n.X, n.Y + 2
+	case "bottom":
+		return n.X + 8, n.Y
+	case "left":
+		return n.X + blockW, n.Y + 2
+	case "top":
+		return n.X + 8, n.Y + blockH
+	}
+	return n.X, n.Y + 2
+}
+
+// arrowChar returns the arrowhead character for the final segment direction.
+func arrowChar(dir string) rune {
+	switch dir {
+	case "right":
+		return '▶'
+	case "bottom":
+		return '▼'
+	case "left":
+		return '◀'
+	case "top":
+		return '▲'
+	}
+	return '▶'
+}
+
+// drawHLine draws a horizontal line segment from (x1,y) to (x2,y).
+// Coordinates are viewport-relative.
+func drawHLine(grid [][]canvasCell, x1, x2, y int, fg lipgloss.Color) {
+	if x1 > x2 {
+		x1, x2 = x2, x1
+	}
+	for x := x1; x <= x2; x++ {
+		setCell(grid, x, y, '─', fg, "")
+	}
+}
+
+// drawVLine draws a vertical line segment from (x,y1) to (x,y2).
+// Coordinates are viewport-relative.
+func drawVLine(grid [][]canvasCell, x, y1, y2 int, fg lipgloss.Color) {
+	if y1 > y2 {
+		y1, y2 = y2, y1
+	}
+	for y := y1; y <= y2; y++ {
+		setCell(grid, x, y, '│', fg, "")
+	}
+}
+
+// drawEdge draws a single orthogonal connection from node `from` to node `to`.
+func (m ArchModel) drawEdge(grid [][]canvasCell, from, to *graph.Node, fg lipgloss.Color) {
+	dir := exitDir(from, to)
+	ex, ey := exitPoint(from, dir)
+	nx, ny := entryPoint(to, dir)
+
+	// Translate canvas → viewport
+	ex -= m.viewportX
+	ey -= m.viewportY
+	nx -= m.viewportX
+	ny -= m.viewportY
+
+	arrow := arrowChar(dir)
+
+	switch dir {
+	case "right", "left":
+		// Horizontal-first L-shape
+		if ey == ny {
+			// Straight horizontal
+			drawHLine(grid, ex, nx, ey, fg)
+		} else {
+			// L-shape: horizontal to nx, then vertical to ny
+			drawHLine(grid, ex, nx, ey, fg)
+			drawVLine(grid, nx, ey, ny, fg)
+			// Corner character at bend
+			if ny > ey {
+				setCell(grid, nx, ey, '┐', fg, "")
+			} else {
+				setCell(grid, nx, ey, '┘', fg, "")
+			}
+		}
+	case "bottom":
+		// Vertical-first L-shape going downward
+		if ex == nx {
+			drawVLine(grid, ex, ey, ny, fg)
+		} else {
+			drawVLine(grid, ex, ey, ny, fg)
+			drawHLine(grid, ex, nx, ny, fg)
+			// Corner: came down, turning right=┌ or left=┐
+			if nx > ex {
+				setCell(grid, ex, ny, '┌', fg, "")
+			} else {
+				setCell(grid, ex, ny, '┐', fg, "")
+			}
+		}
+	case "top":
+		// Vertical-first L-shape going upward
+		if ex == nx {
+			drawVLine(grid, ex, ey, ny, fg)
+		} else {
+			drawVLine(grid, ex, ey, ny, fg)
+			drawHLine(grid, ex, nx, ny, fg)
+			// Corner: came up, turning right=└ or left=┘
+			if nx > ex {
+				setCell(grid, ex, ny, '└', fg, "")
+			} else {
+				setCell(grid, ex, ny, '┘', fg, "")
+			}
+		}
+	}
+	// Draw arrowhead at entry point
+	setCell(grid, nx, ny, arrow, fg, "")
+}
+
+// drawConnections draws all edges into the grid.
+func (m ArchModel) drawConnections(grid [][]canvasCell) {
+	for _, edge := range m.arch.Edges {
+		from, fromOK := m.arch.Nodes[edge.From]
+		to, toOK := m.arch.Nodes[edge.To]
+		if !fromOK || !toOK {
+			continue
+		}
+		fg := colConnDim
+		if edge.From == m.selectedID || edge.To == m.selectedID {
+			fg = colConnActive
+		}
+		m.drawEdge(grid, from, to, fg)
+	}
+
+	// Link mode preview
+	if m.portMode && m.portTargetID != "" {
+		src, srcOK := m.arch.Nodes[m.connectSourceID]
+		tgt, tgtOK := m.arch.Nodes[m.portTargetID]
+		if srcOK && tgtOK {
+			m.drawEdgeDashed(grid, src, tgt, colConnLink)
+		}
+	}
+}
+
+// drawEdgeDashed draws a dashed preview line (for link mode).
+func (m ArchModel) drawEdgeDashed(grid [][]canvasCell, from, to *graph.Node, fg lipgloss.Color) {
+	dir := exitDir(from, to)
+	ex, ey := exitPoint(from, dir)
+	nx, ny := entryPoint(to, dir)
+	ex -= m.viewportX
+	ey -= m.viewportY
+	nx -= m.viewportX
+	ny -= m.viewportY
+
+	// Dashed: draw '-' every other cell
+	drawDashedH := func(x1, x2, y int) {
+		if x1 > x2 {
+			x1, x2 = x2, x1
+		}
+		for x := x1; x <= x2; x++ {
+			if (x-x1)%2 == 0 {
+				setCell(grid, x, y, '-', fg, "")
+			}
+		}
+	}
+	drawDashedV := func(x, y1, y2 int) {
+		if y1 > y2 {
+			y1, y2 = y2, y1
+		}
+		for y := y1; y <= y2; y++ {
+			if (y-y1)%2 == 0 {
+				setCell(grid, x, y, '|', fg, "")
+			}
+		}
+	}
+
+	switch dir {
+	case "right", "left":
+		if ey == ny {
+			drawDashedH(ex, nx, ey)
+		} else {
+			drawDashedH(ex, nx, ey)
+			drawDashedV(nx, ey, ny)
+		}
+	case "bottom", "top":
+		if ex == nx {
+			drawDashedV(ex, ey, ny)
+		} else {
+			drawDashedV(ex, ey, ny)
+			drawDashedH(ex, nx, ny)
+		}
+	}
+}
+
 // View renders the architecture panel.
 func (m ArchModel) View() string {
 	if m.renameMode {
@@ -404,7 +635,10 @@ func (m ArchModel) renderCanvas() string {
 	}
 	grid := makeGrid(m.width, m.height)
 
-	// Draw blocks (connections drawn in Task 5)
+	// Draw connections first (blocks overdraw connection lines at overlap points)
+	m.drawConnections(grid)
+
+	// Draw blocks
 	for _, id := range m.arch.NodeOrder {
 		if n, ok := m.arch.Nodes[id]; ok {
 			m.drawBlock(grid, n)
