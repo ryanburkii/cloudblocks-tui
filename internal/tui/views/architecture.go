@@ -399,16 +399,17 @@ func (m ArchModel) handleNormalKey(msg tea.KeyMsg) (ArchModel, tea.Cmd) {
 }
 
 func (m ArchModel) enterMoveMode() (ArchModel, tea.Cmd) {
+	nodeName := ""
 	if n, ok := m.arch.Nodes[m.selectedID]; ok {
 		m.moveOriginX, m.moveOriginY = n.X, n.Y
+		nodeName = n.Name
 	}
 	m.moveMode = true
 	m.connectMode = false
 	m.portMode = false
 	m.smartPlacementMode = false
 	return m, func() tea.Msg {
-		n := m.arch.Nodes[m.selectedID]
-		return tuicore.StatusMsg{Text: "Moving " + n.Name + " — arrows to reposition, Enter/M to drop, Esc to cancel"}
+		return tuicore.StatusMsg{Text: "Moving " + nodeName + " — arrows to reposition, Enter/M to drop, Esc to cancel"}
 	}
 }
 
