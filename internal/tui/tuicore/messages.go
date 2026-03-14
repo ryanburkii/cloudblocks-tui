@@ -1,20 +1,21 @@
 // internal/tui/tuicore/messages.go
 package tuicore
 
-import "cloudblocks-tui/internal/aws/resources"
+import (
+	"cloudblocks-tui/internal/aws/resources"
+	"cloudblocks-tui/internal/graph"
+)
 
 // AddNodeMsg is emitted by CatalogModel when the user adds a resource.
 type AddNodeMsg struct{ Def *resources.ResourceDef }
 
 // SelectNodeMsg is emitted by ArchModel when the user moves the cursor.
-// FocusProps is true when emitted by the E key — the spec requires focus to
-// shift to the Properties panel in that case.
 type SelectNodeMsg struct {
 	NodeID     string
 	FocusProps bool
 }
 
-// ConnectNodesMsg is emitted by ArchModel when connect mode completes.
+// ConnectNodesMsg is emitted by ArchModel when connect/link mode completes.
 type ConnectNodesMsg struct{ From, To string }
 
 // DeleteNodeMsg is emitted by ArchModel when the user deletes a node.
@@ -38,3 +39,17 @@ type DeployDoneMsg struct{ ExitCode int }
 
 // StatusMsg sets a transient status bar message.
 type StatusMsg struct{ Text string }
+
+// MoveNodeMsg is emitted by ArchModel when a block's canvas position changes.
+// app.go handles it solely by setting the dirty flag.
+type MoveNodeMsg struct {
+	ID   string
+	X, Y int
+}
+
+// StartSmartPlacementMsg is emitted by app.go when a resource with a
+// non-empty ParentRefAttr is added. ArchModel holds the pending node and
+// shows the parent-selection prompt before calling arch.AddNode.
+type StartSmartPlacementMsg struct {
+	Node *graph.Node
+}

@@ -184,10 +184,9 @@ func runeLen(s string) int {
 
 // Update processes input events.
 func (m ArchModel) Update(msg tea.Msg) (ArchModel, tea.Cmd) {
-	// TODO(Task 3): uncomment when StartSmartPlacementMsg is added to tuicore
-	// if spm, ok := msg.(tuicore.StartSmartPlacementMsg); ok {
-	// 	return m.handleStartSmartPlacement(spm)
-	// }
+	if spm, ok := msg.(tuicore.StartSmartPlacementMsg); ok {
+		return m.handleStartSmartPlacement(spm)
+	}
 
 	keyMsg, isKey := msg.(tea.KeyMsg)
 	if !isKey {
@@ -243,10 +242,9 @@ func (m ArchModel) handleLinkKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)           
 func (m ArchModel) handleConnectKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)          { return m, nil }
 func (m ArchModel) handleNormalKey(msg tea.KeyMsg) (ArchModel, tea.Cmd)           { return m, nil }
 
-// TODO(Task 3): uncomment when StartSmartPlacementMsg is added to tuicore
-// func (m ArchModel) handleStartSmartPlacement(msg tuicore.StartSmartPlacementMsg) (ArchModel, tea.Cmd) {
-// 	return m, nil
-// }
+func (m ArchModel) handleStartSmartPlacement(msg tuicore.StartSmartPlacementMsg) (ArchModel, tea.Cmd) {
+	return m, nil
+}
 
 // View renders the architecture panel.
 func (m ArchModel) View() string {
