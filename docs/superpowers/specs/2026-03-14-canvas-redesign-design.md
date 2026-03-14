@@ -166,7 +166,14 @@ In all cases, the arrowhead character (`▶`, `▼`, `◀`, `▲`) is placed at 
 
 ### Viewport auto-scroll
 
-After any `selectedID` change, move, or `SetSize` call: check if the selected block's bounding box (x, y, x+16, y+4) is within `[viewportX+4, viewportY+4, viewportX+width-4, viewportY+height-4]`. If not, shift viewport so the block is centered in the visible area (clamped to canvas bounds).
+After any `selectedID` change, move, or `SetSize` call: check if the selected block's bounding box `(node.X, node.Y, node.X+16, node.Y+4)` is within the safe zone `[viewportX+4, viewportY+4, viewportX+width-20, viewportY+height-8]`. If not, recompute:
+
+```
+viewportX = clamp(node.X + 8 - width/2,  0, max(0, 200 - width))
+viewportY = clamp(node.Y + 2 - height/2, 0, max(0, 60  - height))
+```
+
+This centers the viewport on the block's center point `(node.X+8, node.Y+2)`. Integer division is fine — off-by-one in the viewport offset is invisible to the user.
 
 ---
 
@@ -206,18 +213,18 @@ After any `selectedID` change, move, or `SetSize` call: check if the selected bl
 4. `M` or `Enter` → emit `MoveNodeMsg{ID, X, Y}` to confirm; root `app.go` updates the node; `moveMode = false`
 5. `Esc` → restore `node.X = moveOriginX`, `node.Y = moveOriginY`; emit `MoveNodeMsg` with original coords; `moveMode = false`
 
-**`MoveNodeMsg` flow:** `ArchModel` emits `MoveNodeMsg` as a `tea.Cmd`. Root `app.go` handles it by updating `arch.Nodes[msg.ID].X` and `arch.Nodes[msg.ID].Y` and setting `m.dirty = true`.
+**Data flow during move mode:** `ArchModel` holds a shared reference to `*graph.Architecture`, so it mutates `arch.Nodes[id].X/Y` directly on each arrow press — providing live visual feedback at no extra cost. `MoveNodeMsg` is emitted only on confirm (`M`/`Enter`) or cancel (`Esc`) solely to signal `app.go` to set `m.dirty = true`. `app.go` does not re-apply the X/Y values from the message — it only sets the dirty flag.
 
 ### Port mode (drag-to-connect)
 
 1. Press `P` → `portMode = true`, `connectSourceID = selectedID`, `portTargetID = ""`; source block turns green + `⇥`
 2. Status bar: `"Port mode — navigate to target, Enter to connect, Esc to cancel"`
-3. Arrow keys cycle `portTargetID` to nearest block in that direction (same algorithm as normal selection; source block is excluded); hovered target highlights orange
+3. Arrow keys cycle `portTargetID` using the adjacent block algorithm. Initial pivot (when `portTargetID == ""`) is `connectSourceID`. Once `portTargetID` is set, pivot is `portTargetID`. The source block (`connectSourceID`) is excluded from candidates at all times. Hovered target highlights orange.
 4. `Enter` (with `portTargetID != ""`) → emit `ConnectNodesMsg{From: connectSourceID, To: portTargetID}`; `portMode = false`; `selectedID = portTargetID`
 5. `Enter` (with `portTargetID == ""`) → no-op
 6. `Esc` → `portMode = false`, `portTargetID = ""`
 7. Self-loop (`portTargetID == connectSourceID`): cannot occur (source excluded from cycling)
-8. Duplicate edge: `ConnectNodesMsg` is handled by `arch.Connect()` which is a no-op on duplicates; status bar: `"Connection already exists"`
+8. Duplicate edge: `ConnectNodesMsg` is handled by `arch.Connect()` which is a no-op on duplicates; status bar shows `"Connection already exists"` for 3 seconds (same transient message mechanism used across the app)
 
 ### Manual connect mode (C key)
 
@@ -249,14 +256,20 @@ Resources with empty `ParentRefAttr` (VPC, IGW, S3, DynamoDB, ALB) skip smart pl
 
 **Flow:**
 
-1. Look up compatible parent nodes from the current architecture. If none exist, skip prompt → place block at next stagger position, unconnected.
-2. Focus shifts to the canvas. All blocks and connections dim (muted style). Compatible parent nodes remain full brightness and are listed in the status bar prompt.
-3. Status bar: `"Connect <DisplayName> to: <name1>  <name2>  [none]  (↑↓ select, Enter confirm)"`
-4. `↑`/`↓` cycle through compatible nodes + `[none]`. `←`/`→` are no-ops. `Enter` confirms.
-5. `Esc` acts as `[none]`.
-6. If a parent is chosen: new block is placed at (parentX, parentY + 6) and edge is created automatically via `AddNode` + `Connect`.
-7. If `[none]`: block placed at next stagger position with no edge.
-8. After placement, new block is auto-selected; canvas un-dims; normal mode resumes.
+1. Create `pendingNode` with a generated ID and default properties. Do NOT call `arch.AddNode` yet — the node is held in `ArchModel.pendingNode` only.
+2. Look up compatible parent nodes from the current architecture (based on table above). If none exist, skip prompt — jump to step 8 with `[none]` behaviour.
+3. Focus shifts to the canvas. All blocks and connections dim (muted style). Compatible parent nodes remain full brightness. Set `smartPlacementMode = true`, `smartPlacementOptions = [compatibleIDs..., "none"]`, `smartPlacementIdx = 0`.
+4. Status bar: `"Connect <DisplayName> to: <name1>  <name2>  [none]  (↑↓ select, Enter confirm)"`
+5. `↑`/`↓` cycle `smartPlacementIdx`. `←`/`→` are no-ops. `Enter` confirms the highlighted option. `Esc` acts as `[none]`.
+6. **If a parent is chosen:**
+   - Count existing children: `childCount = number of edges where edge.From == chosenParentID`
+   - Place `pendingNode` at `(parentX + 20 * childCount, parentY + 6)`
+   - Call `arch.AddNode(pendingNode)` then `arch.Connect(chosenParentID, pendingNode.ID)`
+7. **If `[none]`:**
+   - Stagger index = `len(arch.Nodes)` at this moment (pendingNode is not yet in arch.Nodes)
+   - Compute stagger position, set `pendingNode.X, pendingNode.Y`
+   - Call `arch.AddNode(pendingNode)` with no edge
+8. Set `selectedID = pendingNode.ID`; `pendingNode = nil`; `smartPlacementMode = false`; canvas un-dims; emit `AddNodeMsg` to `app.go` (so dirty flag is set).
 
 ### Rename mode
 
