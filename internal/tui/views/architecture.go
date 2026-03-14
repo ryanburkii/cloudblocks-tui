@@ -246,6 +246,144 @@ func (m ArchModel) handleStartSmartPlacement(msg tuicore.StartSmartPlacementMsg)
 	return m, nil
 }
 
+// makeGrid creates a width×height cell grid filled with spaces.
+func makeGrid(w, h int) [][]canvasCell {
+	grid := make([][]canvasCell, h)
+	for y := range grid {
+		grid[y] = make([]canvasCell, w)
+		for x := range grid[y] {
+			grid[y][x] = canvasCell{ch: ' ', fg: colNormalBorder, bg: ""}
+		}
+	}
+	return grid
+}
+
+// setCell writes a rune+colors to grid[y][x] if in bounds.
+func setCell(grid [][]canvasCell, x, y int, ch rune, fg, bg lipgloss.Color) {
+	if y < 0 || y >= len(grid) || x < 0 || x >= len(grid[0]) {
+		return
+	}
+	grid[y][x] = canvasCell{ch: ch, fg: fg, bg: bg}
+}
+
+// renderGrid converts the cell grid to a displayable string.
+func renderGrid(grid [][]canvasCell) string {
+	var sb strings.Builder
+	for y, row := range grid {
+		for _, c := range row {
+			style := lipgloss.NewStyle().Foreground(c.fg)
+			if c.bg != "" {
+				style = style.Background(c.bg)
+			}
+			sb.WriteString(style.Render(string(c.ch)))
+		}
+		if y < len(grid)-1 {
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+// blockBorderColor returns the border color for a given node based on current mode.
+func (m ArchModel) blockBorderColor(nodeID string) lipgloss.Color {
+	switch {
+	case nodeID == m.selectedID && m.moveMode:
+		return colMove
+	case nodeID == m.selectedID && m.portMode:
+		return colMove
+	case nodeID == m.selectedID:
+		return colSelected
+	case nodeID == m.portTargetID && m.portMode:
+		return colPortTarget
+	default:
+		return colNormalBorder
+	}
+}
+
+// blockBg returns the background color for a given node.
+func (m ArchModel) blockBg(nodeID string) lipgloss.Color {
+	if (nodeID == m.selectedID) && (m.moveMode || m.portMode) {
+		return colMoveBg
+	}
+	if m.smartPlacementMode {
+		for _, opt := range m.smartPlacementOptions {
+			if opt == nodeID {
+				return colNormalBg // compatible: full brightness
+			}
+		}
+		return colDimBg // incompatible: dim
+	}
+	return colNormalBg
+}
+
+// drawBlock renders a node's block into the grid.
+func (m ArchModel) drawBlock(grid [][]canvasCell, n *graph.Node) {
+	// Translate canvas coords to viewport coords
+	bx := n.X - m.viewportX
+	by := n.Y - m.viewportY
+
+	// Skip if completely off-screen
+	if bx+blockW < 0 || bx >= m.width || by+blockH < 0 || by >= m.height {
+		return
+	}
+
+	borderCol := m.blockBorderColor(n.ID)
+	bg := m.blockBg(n.ID)
+
+	nameSuffix := ""
+	if n.ID == m.selectedID && m.moveMode {
+		nameSuffix = " \u2725" // ✥
+	} else if n.ID == m.selectedID && m.portMode {
+		nameSuffix = " \u21e5" // ⇥
+	}
+
+	// Dim fg for incompatible nodes during smart placement
+	fgType := colType
+	fgName := colName
+	if m.smartPlacementMode {
+		isCompatible := false
+		for _, opt := range m.smartPlacementOptions {
+			if opt == n.ID {
+				isCompatible = true
+				break
+			}
+		}
+		if !isCompatible {
+			fgType = colDimFg
+			fgName = colDimFg
+		}
+	}
+
+	typeStr := truncatePad(n.Type, 13)
+	nameStr := truncatePad(n.Name+nameSuffix, 13)
+
+	// Row 0: top border  ┌──────────────┐
+	// Row 1: type row    │ <type>       │
+	// Row 2: name row    │ <name>       │
+	// Row 3: bot border  └──────────────┘
+	borderChars := []rune("┌" + strings.Repeat("─", 14) + "┐")
+	botChars := []rune("└" + strings.Repeat("─", 14) + "┘")
+	typeChars := []rune("│ " + typeStr + "│")
+	nameChars := []rune("│ " + nameStr + "│")
+
+	rows := [4][]rune{borderChars, typeChars, nameChars, botChars}
+	rowFG := [4]lipgloss.Color{borderCol, fgType, fgName, borderCol}
+	isBorder := [4]bool{true, false, false, true}
+
+	for dy, row := range rows {
+		y := by + dy
+		for dx, ch := range row {
+			x := bx + dx
+			fg := rowFG[dy]
+			// Side border chars on content rows
+			if !isBorder[dy] && (dx == 0 || dx == blockW-1) {
+				fg = borderCol
+			}
+			setCell(grid, x, y, ch, fg, bg)
+		}
+	}
+}
+
 // View renders the architecture panel.
 func (m ArchModel) View() string {
 	if m.renameMode {
@@ -256,7 +394,24 @@ func (m ArchModel) View() string {
 	if len(m.arch.Nodes) == 0 {
 		return mutedStyle.Render("(empty — press A in Catalog to add resources)")
 	}
-	return mutedStyle.Render("(canvas — coming in next task)")
+	return m.renderCanvas()
+}
+
+// renderCanvas builds the full canvas view string.
+func (m ArchModel) renderCanvas() string {
+	if m.width == 0 || m.height == 0 {
+		return ""
+	}
+	grid := makeGrid(m.width, m.height)
+
+	// Draw blocks (connections drawn in Task 5)
+	for _, id := range m.arch.NodeOrder {
+		if n, ok := m.arch.Nodes[id]; ok {
+			m.drawBlock(grid, n)
+		}
+	}
+
+	return renderGrid(grid)
 }
 
 // emitSelect emits SelectNodeMsg for the currently selected node.
