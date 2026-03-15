@@ -250,6 +250,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Handle sub-model output messages.
 	switch msg := msg.(type) {
+	case MoveNodeMsg:
+		// MoveNodeMsg signals that a block was moved or placed — set dirty.
+		m.dirty = true
+
 	case AddNodeMsg:
 		n := &graph.Node{
 			ID:         fmt.Sprintf("%s-%d", msg.Def.TFType, len(m.arch.Nodes)+1),
@@ -257,9 +261,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Name:       msg.Def.DisplayName,
 			Properties: copyProps(msg.Def.DefaultProps),
 		}
-		m.arch.AddNode(n)
-		m.dirty = true
-		m.archV = m.archV.Refresh(m.arch)
+		if msg.Def.ParentRefAttr != "" {
+			// Smart placement: hand the pending node to ArchModel.
+			// ArchModel calls arch.AddNode once the user confirms the parent.
+			var cmd tea.Cmd
+			m.archV, cmd = m.archV.Update(StartSmartPlacementMsg{Node: n})
+			cmds = append(cmds, cmd)
+		} else {
+			// No parent ref: compute stagger position and add directly.
+			n.X, n.Y = views.StaggerPosition(len(m.arch.Nodes))
+			m.arch.AddNode(n)
+			m.dirty = true
+			m.archV = m.archV.Refresh(m.arch)
+		}
 
 	case SelectNodeMsg:
 		if n, ok := m.arch.Nodes[msg.NodeID]; ok {
@@ -361,6 +375,10 @@ func (m Model) View() string {
 	archLabel := "ARCHITECTURE"
 	if m.archV.InConnectMode() {
 		archLabel = "ARCHITECTURE [CONNECT]"
+	} else if m.archV.InLinkMode() {
+		archLabel = "ARCHITECTURE [LINK]"
+	} else if m.archV.InSmartPlacementMode() {
+		archLabel = "ARCHITECTURE [PLACING]"
 	}
 	archPanel := archStyle.Width(archW).Render(
 		titleStyle.Render(archLabel) + "\n" + m.archV.View(),

@@ -4,7 +4,6 @@ package tui
 import "cloudblocks-tui/internal/tui/tuicore"
 
 // Re-export message types from tuicore so callers can use either import path.
-// Using type aliases ensures tui.AddNodeMsg and tuicore.AddNodeMsg are the same type.
 type AddNodeMsg = tuicore.AddNodeMsg
 type SelectNodeMsg = tuicore.SelectNodeMsg
 type ConnectNodesMsg = tuicore.ConnectNodesMsg
@@ -14,3 +13,5 @@ type UpdatePropMsg = tuicore.UpdatePropMsg
 type DeployLineMsg = tuicore.DeployLineMsg
 type DeployDoneMsg = tuicore.DeployDoneMsg
 type StatusMsg = tuicore.StatusMsg
+type MoveNodeMsg = tuicore.MoveNodeMsg
+type StartSmartPlacementMsg = tuicore.StartSmartPlacementMsg
