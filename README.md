@@ -1,6 +1,6 @@
 # CloudBlocks TUI
 
-A terminal-based AWS infrastructure builder. Design cloud architectures visually in your terminal, then deploy them with Terraform.
+A terminal-based version of [CloudBlocks](https://github.com/juliushamm/cloudblocks), an AWS infrastructure visualizer and builder. Design cloud architectures visually in your terminal, then deploy them with Terraform.
 
 ## Overview
 
